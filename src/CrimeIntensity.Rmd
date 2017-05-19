@@ -1,0 +1,285 @@
+---
+title: "Crime Analytics"
+author: "Arjun Hande (N14549970), Pratik Rane (N13276381)"
+output: html_document
+---
+
+###INDEX (For Below Code):
+Part (A): Importing Required packages, setting file path & Datasets (2014 & 2015).
+
+Part (B): Predicting Crime Intensity for January 2016. [Time Series Analysis - ARIMA]
+
+Part (C): Visualising the above predicted crime intensity of January 2016. [on Map]
+
+Part (D): Evaluating the prediction model used. [F-Measure]
+
+##Part (A): Importing Required packages, setting file path & Datasets (2014 & 2015).
+
+```{r}
+#importing the required packages.
+library(ggplot2)
+library(ggmap)
+library(tseries)
+library(rgdal)
+require("plyr")
+
+#setting the file path
+filePathDirectory = "/Users/pratikrane92/Desktop/FDS_Project/"
+#filePathDirectory = "/Users/ArjunHandeMac/Desktop/FDS/Project"
+
+setwd(filePathDirectory)
+
+#importing the dataset
+dataframe <- read.csv("NYC_Crime_2014_15.csv", header = T, sep=",");
+
+attach(dataframe)
+```
+
+##Part (B): Predicting Crime Intensity for January 2016.
+Since our dataset has crimes taking place over time, we have decided to do the Time Series Analysis. We have used the ARIMA model to predict the crimes happening in January 2016, based on data from previous year [Jan '15 to Dec '15].
+
+We are calculating the the crime intensity (on scale of 1 to 5, with 1 being lowest & 5 being highest crime) based on number of crimes happening and type of crimes(giving weights according to type of crime).
+
+```{r}
+months <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+#the  blocks in new york city also known as precincts and are labeled between 1 to 123
+blocks <- c(1:123)
+
+#intenstiyDF will contain the crime intestity for past 12 months for each precint calculated by using number of crimes, types of crimes(giving weights).
+intensityDF <- data.frame(precinct= numeric(0), month = integer(0), crime_intensity = integer(0), stringsAsFactors = F)
+
+#predicting for January 2015 based on past 12 months data
+month = 1  
+year <- "2015"  #predicting based on 2015 data
+#We can add time range condition as well to calculate at specify time.
+
+#Calculating the WMA per block (i.e. per Precinct) for previous 12 months in New York City
+#Weights are given according to type of offense
+for (i in 1:123) {
+  for(j in 1:12) {
+
+     temp_month <- (month + j - 1) %% 12;
+     if (temp_month == 0) temp_month = 12;
+
+     cond <- Precinct == i & Occurrence.Month == months[temp_month] & Occurrence.Year == year
+
+     type_1 <- Offense[cond & Offense == "BURGLARY"]
+     type_2 <- Offense[cond & Offense == "ROBBERY"]
+     type_3 <- Offense[cond & (Offense == "GRAND LARCENY" | Offense == "GRAND LARCENY OF MOTOR VEHICLE")]
+     type_4 <- Offense[cond & Offense == "FELONY ASSAULT"]
+     type_5 <- Offense[cond & Offense == "RAPE"]
+
+     crimeValue <- (length(type_1) * 1 + length(type_2) * 2 + length(type_3) * 3 + length(type_4) * 4 +  length(type_5) * 5)
+
+     newrow <- data.frame(precinct= i, month = months[temp_month], crime_intensity = crimeValue, stringsAsFactors = F)
+
+    if(!is.nan(crimeValue) & crimeValue != 0)
+      intensityDF = rbind(intensityDF, newrow)
+    }
+}
+
+```
+
+Once we have calculated the crime intensity for each block & every month of 2015, we will predict the crime intesity for January 2016 using ARIMA model as below:
+
+```{r}
+#predicting using ARIMA Model
+predictDF <- data.frame(precinct= numeric(0), crime_intensity = integer(0))
+
+#ARIMA
+
+#For predicting for each Precinct/block (which are labelled between 1 to 123)
+for(k in 1:123) {
+  x <- intensityDF$crime_intensity[intensityDF$precinct == k]
+  if(length(x) != 0) {
+     data <- ts(intensityDF$crime_intensity[intensityDF$precinct == k])  
+
+     #adf.test(data,alternative = "stationary") -> We have tested & found that the data is stationary to do the ARIMA
+     #i.e. we do not need to make the data stationary. Hence d=0.
+
+     #acf(data,  main = "ACF")  
+     #pacf(data, main = "PACF")
+     #p & q are calculated using acf & pacf plots  which are 1 & 0 respectively.
+
+    #using (p,d,q) values to predict using ARIMA     
+    fit <-arima(data ,order=c(1,0,0))
+    pd <- predict(fit, n.ahead = 1)
+
+    a = as.numeric(pd[1])
+    newrow1 <- data.frame(precinct = k, crime_intensity = a)
+    predictDF = rbind(predictDF, newrow1)
+  }
+}
+
+#Once the crime intensity are predicted, we will scale these values on a scale of 1 to 5 for visualising purpose, with 1 being lowest crime intensity & 5 being highest crime intenstiy
+scaleFunction <- function(x){(x-min(x))/(max(x)-min(x))}
+predictDF$crime_intensity = round(data.frame(scaleFunction(predictDF$crime_intensity))*5)
+predictDF$crime_intensity[predictDF$crime_intensity == 0] = 1
+```
+
+##Part (C): Visualising the above predicted crime intensity of January 2016. [on Map]
+
+```{r}
+#Following Precincts data is downloaded to from NYU Open Data for visualising purpose
+Neighborhoods <- readOGR(dsn = 'NYCPolicePrecincts',
+                        layer = 'geo_export_a84e2626-1425-4220-aeb9-71f49042e5d6')
+Neighborhoods <- spTransform(Neighborhoods, CRS("+proj=longlat +datum=WGS84"))
+Neighborhoods@data$id <- rownames(Neighborhoods@data)
+Neighborhoods.df <- NULL
+Neighborhoods.df <- fortify(Neighborhoods)
+Neighborhoods.df <- join(Neighborhoods.df, Neighborhoods@data, by="id")
+Neighborhoods.df <- merge(Neighborhoods.df, predictDF, by.x="precinct", by.y="precinct", all.x=T, a..ly=F)
+
+#Calculting Preinct Centres (latitude & longitude) to show Precinct Number on map during visualing
+precinctCentres <- data.frame(precinct= numeric(0), lat_centre = numeric(0), long_centre = numeric(0))
+for(k in 1:123) {
+  temp_lat2 = mean(Neighborhoods.df$lat[Neighborhoods.df$precinct == k])
+  temp_lon2 = mean(Neighborhoods.df$long[Neighborhoods.df$precinct == k])
+  newrow1 <- data.frame(precinct = k, lat_centre = temp_lat2, long_centre = temp_lon2)
+  if(!is.nan(a))
+      precinctCentres = rbind(precinctCentres, newrow1)
+}
+
+nycMap = map = get_map(location = "new york" , zoom = 11, maptype = "terrain")
+ggmap(nycMap) +
+    geom_polygon(aes(fill = crime_intensity, x = long, y = lat, group = group),
+                 data = Neighborhoods.df,
+                 alpha = 0.8,
+                 color = "black",
+                 size = 0.2) +  
+  scale_fill_gradient(breaks=c(1,2,3,4,5), labels=c("Very Low","Low", "Medium","High", "Very High"), low = "green", high = "red") +
+  geom_text(aes(x=long_centre,y=lat_centre,label=precinct), data = precinctCentres, size=4)
+
+```
+
+##Part (D): Evaluating the prediction model used. [F-Measure]
+We will evaluate the above model using F-measure (precision & recall)
+
+For validation purpose, we will select April 2014 to March 2015 data & predict crime intensities for April 2015. [Output Standard]
+
+Then we will calculate the actual intensity  for April 2015. [Gold Standard]
+
+Using above output & gold standard we will evaluate our model.
+
+####Predicting April 2015 crime intensities based on April 2014 to March 2015 data: [Output Standard]
+
+```{r}
+#intenstiyDF will contain the crime intestity for past 12 months for each precint calculated by using number of crimes, types of crimes(giving weights).
+intensityDF <- data.frame(precinct= numeric(0), month = integer(0), crime_intensity = integer(0), stringsAsFactors = F)
+
+#predicting for April 2015 based on past 12 months data
+month = 4  
+year <- "2014"  #predicting based on 2014 data
+
+#Calculating the WMA per block (i.e. per Precinct) for previous 12 months in New York City
+#Weights are given according to type of offense
+for (i in 1:123) {
+  for(j in 1:12) {
+
+     temp_month <- (month + j - 1) %% 12;
+     if (temp_month == 0) temp_month = 12;
+
+     cond <- Precinct == i & Occurrence.Month == months[temp_month] & Occurrence.Year == year
+
+     type_1 <- Offense[cond & Offense == "BURGLARY"]
+     type_2 <- Offense[cond & Offense == "ROBBERY"]
+     type_3 <- Offense[cond & (Offense == "GRAND LARCENY" | Offense == "GRAND LARCENY OF MOTOR VEHICLE")]
+     type_4 <- Offense[cond & Offense == "FELONY ASSAULT"]
+     type_5 <- Offense[cond & Offense == "RAPE"]
+
+     crimeValue <- (length(type_1) * 1 + length(type_2) * 2 + length(type_3) * 3 + length(type_4) * 4 +  length(type_5) * 5)
+
+     newrow <- data.frame(precinct= i, month = months[temp_month], crime_intensity = crimeValue, stringsAsFactors = F)
+
+    if(!is.nan(crimeValue) & crimeValue != 0)
+      intensityDF = rbind(intensityDF, newrow)
+    }
+}
+
+#Once we have calculated the crime intensity for each block & every month of 2014, we will predict the crime intesity for April 2015 using ARIMA model as below:
+
+#predicting using ARIMA Model
+predictDF <- data.frame(precinct= numeric(0), crime_intensity = integer(0))
+
+#For predicting for each Precinct/block (which are labelled between 1 to 123)
+for(k in 1:123) {
+  x <- intensityDF$crime_intensity[intensityDF$precinct == k]
+  if(length(x) != 0) {
+     data <- ts(intensityDF$crime_intensity[intensityDF$precinct == k])  
+
+     #adf.test(data,alternative = "stationary") -> We have tested & found that the data is stationary to do the ARIMA
+     #i.e. we do not need to make the data stationary. Hence d=0.
+
+     #acf(data,  main = "ACF")  
+     #pacf(data, main = "PACF")
+     #p & q are calculated using acf & pacf plots  which are 1 & 0 respectively.
+
+    #using (p,d,q) values to predict using ARIMA     
+    fit <-arima(data ,order=c(1,0,0))
+    pd <- predict(fit, n.ahead = 1)
+
+    a = as.numeric(pd[1])
+    newrow1 <- data.frame(precinct = k, crime_intensity = a)
+    predictDF = rbind(predictDF, newrow1)
+  }
+}
+
+#Once the crime intensity are predicted, we will scale these values on a scale of 1 to 5
+scaleFunction <- function(x){(x-min(x))/(max(x)-min(x))}
+predictDF$crime_intensity = round(data.frame(scaleFunction(predictDF$crime_intensity))*5)
+predictDF$crime_intensity[predictDF$crime_intensity == 0] = 1
+```
+
+####Calculating actual April 2015 crime intensities based on actual April 2015 data: [Gold Standard]
+
+``` {r}
+actualDF <- data.frame(precinct= numeric(0), crime_intensity = integer(0))
+
+#For calculating for each Precinct/block (which are labelled between 1 to 123)
+for (i in 1:123) {
+     cond <- Precinct == i & Occurrence.Month == months[3] & Occurrence.Year == year
+     type_1 <- Offense[cond & Offense == "BURGLARY"]
+     type_2 <- Offense[cond & Offense == "ROBBERY"]
+     type_3 <- Offense[cond & (Offense == "GRAND LARCENY" | Offense == "GRAND LARCENY OF MOTOR VEHICLE")]
+     type_4 <- Offense[cond & Offense == "FELONY ASSAULT"]
+     type_5 <- Offense[cond & Offense == "RAPE"]
+     crimeValue <- (length(type_1) * 1 + length(type_2) * 2 + length(type_3) * 3 + length(type_4) * 4 +  length(type_5) * 5)
+
+     newrow <- data.frame(precinct= i, crime_intensity = crimeValue, stringsAsFactors = F)
+
+    if(!is.nan(crimeValue) & crimeValue != 0)
+      actualDF = rbind(actualDF, newrow)
+}
+
+
+  #Scaling the predicted crime intensity on a scale of 1 to 5 with 1 being lowest crime to 5 being heighest crime intesity.
+  scaleFunction <- function(x){(x-min(x))/(max(x)-min(x))}
+  actualDF$crime_intensity = round(data.frame(scaleFunction(actualDF$crime_intensity))*5)
+  actualDF$crime_intensity[actualDF$crime_intensity == 0] = 1
+```
+
+
+####F-1 Measure
+
+```{r}
+
+#Using above output & gold standard calculating F Measure as below:
+
+NCorrectPredictions <- predictDF[predictDF$crime_intensity == actualDF$crime_intensity,]
+precision <- nrow(NCorrectPredictions) / nrow(predictDF)
+
+recall <- nrow(NCorrectPredictions) / nrow(actualDF)
+
+F1 <- (2 * precision * recall) / (precision + recall)
+
+F1
+```
+
+The F-1 Measure for our model is 0.88 i.e. 88 % Accurate.
+
+We have also checked this F-1 Measure validation for March 2015 data using same procedure as above [Part (D)]. In this case we got good F-1 Measure as 0.77.
+
+Hence, we can conclude that our ARIMA model prediction is viable.
+
+Thank you !
