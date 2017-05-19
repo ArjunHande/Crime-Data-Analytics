@@ -11,6 +11,8 @@ src/analytics.txt - includes hive commands that is used to perform analytics on 
 
 src/ThreeCityHeatMaps.rmd - used to visualize the result obtained from the analytics. 
 
+src/CrimeIntensity.rmd - predict the crime rate using ARIMA model. 
+
 
 Step 1: Run the code in the data_preprocessing.pig file in a grunt over the data taken from the source.
 
